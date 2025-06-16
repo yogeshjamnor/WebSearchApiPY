@@ -6,12 +6,20 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 CORS(app)
 
-# Trusted Indian news domains
-INDIAN_NEWS_SITES = [
-    "ndtv.com", "news18.com", "hindustantimes.com", "indiatoday.in",
-    "timesofindia.indiatimes.com", "thehindu.com", "zeenews.india.com",
-    "firstpost.com", "livemint.com", "deccanherald.com"
-]
+# List of Indian news sites to search directly
+NEWS_SITES = {
+    "ndtv": "https://www.ndtv.com/search?searchtext=",
+    "news18": "https://www.news18.com/search/?searchText=",
+    "hindustantimes": "https://www.hindustantimes.com/search?q=",
+    "indiatoday": "https://www.indiatoday.in/search?q=",
+    "timesofindia": "https://timesofindia.indiatimes.com/topic/",
+    "thehindu": "https://www.thehindu.com/search/?q=",
+    "zeenews": "https://zeenews.india.com/tags/",
+}
+
+headers = {
+    "User-Agent": "Mozilla/5.0"
+}
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -19,53 +27,52 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    headers = {"User-Agent": "Mozilla/5.0"}
-    site_filter = "+OR+".join(f"site:{site}" for site in INDIAN_NEWS_SITES)
-    search_url = f"https://html.duckduckgo.com/html/?q={query}+{site_filter}"
+    results = []
 
-    try:
-        search_response = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(search_response.text, "html.parser")
+    for name, base_url in NEWS_SITES.items():
+        try:
+            print(f"Searching {name}...")
+            if name == "timesofindia" or name == "zeenews":
+                search_url = base_url + query.replace(" ", "-")
+            else:
+                search_url = base_url + query.replace(" ", "+")
 
-        links = []
-        seen = set()
+            res = requests.get(search_url, headers=headers, timeout=10)
+            soup = BeautifulSoup(res.text, "html.parser")
 
-        for a in soup.select("a.result__a"):
-            href = a.get("href")
-            if href and href.startswith("http") and any(site in href for site in INDIAN_NEWS_SITES):
-                if href not in seen:
+            # Find article links
+            links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "http" not in href:
+                    href = base_url.split("/search")[0] + href
+                if href.startswith("http") and name in href:
                     links.append(href)
-                    seen.add(href)
-            if len(links) >= 5:
-                break
+                if len(links) >= 2:
+                    break
 
-        if not links:
-            return jsonify({"data": ["❌ No Indian news articles found for that query."]})
+            # Fetch summaries
+            for link in links:
+                try:
+                    article = requests.get(link, headers=headers, timeout=10)
+                    article_soup = BeautifulSoup(article.text, "html.parser")
+                    paras = article_soup.find_all("p")
+                    content = "\n".join(
+                        [p.get_text(strip=True) for p in paras if len(p.get_text(strip=True)) > 50]
+                    )
+                    summary = " ".join(content.split()[:400])
+                    if summary:
+                        results.append(f"According to {name}.com:\n{summary}")
+                except:
+                    continue
+        except Exception as e:
+            continue
 
-        results = []
-        for link in links:
-            try:
-                res = requests.get(link, headers=headers, timeout=10)
-                article_soup = BeautifulSoup(res.text, "html.parser")
-                paragraphs = article_soup.find_all("p")
-                content = "\n".join([
-                    p.get_text(strip=True) for p in paragraphs
-                    if len(p.get_text(strip=True)) > 60
-                ])
-                summary = " ".join(content.split()[:400])
-                domain = link.split("/")[2].replace("www.", "")
-                if summary and len(summary) > 200:
-                    results.append(f"According to {domain}:\n{summary}")
-            except:
-                continue
+    if not results:
+        return jsonify({"data": ["❌ No Indian news articles found for that keyword."]})
 
-        if not results:
-            return jsonify({"data": ["❌ Articles found, but no readable content extracted."]})
-        
-        return jsonify({"data": results})
+    return jsonify({"data": results})
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
