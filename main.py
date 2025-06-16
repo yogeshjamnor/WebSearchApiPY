@@ -7,6 +7,7 @@ app = Flask(__name__)
 CORS(app)
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+EXCLUDED_DOMAINS = ["wikipedia.org", "britannica.com"]
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -16,40 +17,44 @@ def scrape():
 
     try:
         search_url = f"https://www.bing.com/search?q={query}"
-        res = requests.get(search_url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
+        search_res = requests.get(search_url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(search_res.text, "html.parser")
 
-        # Check for direct answers
-        selectors = [
-            ".b_focusTextLarge",    # Big bold answer
-            ".b_focusTextMedium",   # Medium bold answer
-            ".b_vPanel .b_snippet", # Knowledge card
-            ".b_subModule",         # Sub modules
-        ]
-        for sel in selectors:
-            element = soup.select_one(sel)
+        # Try to extract direct summary from answer box
+        for selector in [".b_focusTextLarge", ".b_focusTextMedium", ".b_vPanel .b_snippet"]:
+            element = soup.select_one(selector)
             if element:
-                text = element.get_text(strip=True)
-                if text:
-                    return jsonify({"data": [f"Summary:\n{text}"]})
+                summary = element.get_text(strip=True)
+                if summary:
+                    return jsonify({"data": [f"Summary:\n{summary}"]})
 
-        # Fallback: search results
+        # Fallback to snippets, excluding unwanted domains
         snippets = soup.select("li.b_algo")
         results = []
-        for item in snippets:
-            title_tag = item.select_one("h2 a")
-            desc_tag = item.select_one(".b_caption p")
+        seen_sites = set()
+
+        for snippet in snippets:
+            title_tag = snippet.select_one("h2 a")
+            desc_tag = snippet.select_one(".b_caption p")
             if not title_tag or not desc_tag:
                 continue
+
             link = title_tag.get("href", "")
-            if any(x in link for x in ["wikipedia.org", "britannica.com"]):
+            domain = link.split("/")[2].replace("www.", "") if "//" in link else ""
+
+            if any(domain.endswith(ex) for ex in EXCLUDED_DOMAINS):
                 continue
-            site = link.split("/")[2].replace("www.", "")
+
+            if domain in seen_sites:
+                continue
+
+            seen_sites.add(domain)
             title = title_tag.get_text(strip=True)
             desc = desc_tag.get_text(strip=True)
-            if desc:
-                results.append(f"According to {site}:\n{title}\n{desc}")
-            if len(results) >= 3:
+            if title and desc:
+                results.append(f"According to {domain}:\n{title}\n{desc}")
+
+            if len(results) >= 4:
                 break
 
         if results:
@@ -58,7 +63,7 @@ def scrape():
             return jsonify({"data": ["❌ No relevant summary or results found."]})
 
     except Exception as e:
-        return jsonify({"error": f"❌ Error: {str(e)}"]}), 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
