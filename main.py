@@ -2,14 +2,9 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
-import urllib.parse
 
 app = Flask(__name__)
 CORS(app)
-
-@app.route("/")
-def home():
-    return "API is Live"
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -17,47 +12,38 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    search_url = f"https://lite.duckduckgo.com/lite?q={urllib.parse.quote(query)}"
     headers = {"User-Agent": "Mozilla/5.0"}
+    search_url = f"https://duckduckgo.com/html/?q={query}+site:news18.com+OR+site:hindustantimes.com+OR+site:aljazeera.com+OR+site:ndtv.com"
 
     try:
-        res = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
+        search_response = requests.get(search_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(search_response.text, "html.parser")
+
+        links = []
+        for a in soup.select("a.result__a"):
+            href = a.get("href")
+            if href and "http" in href:
+                links.append(href)
+            if len(links) >= 3:
+                break
 
         results = []
-        for link in soup.select("a"):
-            href = link.get("href")
-            if href and "uddg=" in href:
-                full_url = urllib.parse.unquote(href.split("uddg=")[-1].split("&")[0])
-                article_text = extract_article_text(full_url)
-                if article_text:
-                    results.append({
-                        "source": full_url,
-                        "content": article_text
-                    })
-                if len(results) >= 3:  # Limit to 3 full articles per query
-                    break
+        for link in links:
+            try:
+                article_res = requests.get(link, headers=headers, timeout=10)
+                article_soup = BeautifulSoup(article_res.text, "html.parser")
+                paragraphs = article_soup.find_all("p")
+                content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text()) > 80])
+                summary = " ".join(content.split()[:400])
+                source = link.split("/")[2].replace("www.", "")
+                if summary:
+                    results.append(f"According to {source}:\n{summary}")
+            except:
+                continue
 
-        return jsonify(results)
-
+        return jsonify({"data": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def extract_article_text(url):
-    try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-
-        # Get all visible paragraph tags
-        paragraphs = soup.find_all("p")
-        content = "\n".join(p.text.strip() for p in paragraphs if len(p.text.strip()) > 60)
-
-        # Filter out small junk content
-        if len(content) > 800:  # roughly A4 size
-            return content[:5000]  # limit to avoid too long response
-        return None
-    except:
-        return None
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(port=5000)
