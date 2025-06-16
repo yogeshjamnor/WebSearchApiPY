@@ -4,40 +4,59 @@ import requests
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
-
-@app.route("/")
-def home():
-    return "API is Live"
+CORS(app)
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
     query = request.args.get("q")
     if not query:
-        return jsonify({"error": "Missing query parameter 'q'"}), 400
+        return jsonify({"error": "Missing query parameter"}), 400
 
-    url = f"https://lite.duckduckgo.com/lite?q={query}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
+    search_url = f"https://html.duckduckgo.com/html?q={query}+site:news18.com+OR+site:hindustantimes.com+OR+site:aljazeera.com+OR+site:ndtv.com"
 
     try:
-        res = requests.get(url, headers=headers)
-        soup = BeautifulSoup(res.text, "html.parser")
+        search_response = requests.get(search_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(search_response.text, "html.parser")
 
-        results = []
-        for link in soup.select("a"):
-            title = link.text.strip()
-            href = link.get("href")
-            if href and "http" in href:
-                results.append({"title": title, "link": href})
-            if len(results) >= 5:
+        # Get top 3 article links
+        links = []
+        for a in soup.select("a.result__a"):
+            href = a.get("href")
+            if href and href.startswith("http"):
+                links.append(href)
+            if len(links) >= 3:
                 break
 
-        return jsonify(results)
+        results = []
+        for link in links:
+            try:
+                article_res = requests.get(link, headers=headers, timeout=10)
+                article_soup = BeautifulSoup(article_res.text, "html.parser")
+
+                # Extract long meaningful paragraphs
+                paragraphs = article_soup.find_all("p")
+                long_paragraphs = [p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 80]
+                full_text = "\n\n".join(long_paragraphs)
+
+                # Shorten only if it's too long; keep as full paragraph text
+                if full_text:
+                    summary = full_text.strip().split('\n\n')
+                    if len(summary) > 10:
+                        summary = summary[:10]  # limit to 10 paragraphs (~20-30 lines)
+                    joined = "\n\n".join(summary)
+                    source = link.split("/")[2].replace("www.", "")
+                    results.append(f"According to {source}:\n\n{joined}")
+            except Exception as e:
+                print(f"Failed to fetch article: {link}\nError: {e}")
+                continue
+
+        if not results:
+            return jsonify({"error": "No detailed news summaries found."}), 404
+
+        return jsonify({"data": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(port=5000, debug=True)
