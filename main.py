@@ -7,11 +7,10 @@ import re
 app = Flask(__name__)
 CORS(app)
 
-# Keywords for filtering Indian English results
-indian_domains = [
-    "indiatoday.in", "ndtv.com", "timesofindia.indiatimes.com", "hindustantimes.com",
-    "news18.com", "livemint.com", "thehindu.com", "economictimes.indiatimes.com",
-    "indianexpress.com", "dnaindia.com", "deccanherald.com"
+# Trusted Indian English sources
+indian_sites = [
+    "ndtv.com", "timesofindia.indiatimes.com", "indiatoday.in", "hindustantimes.com",
+    "news18.com", "thehindu.com", "indianexpress.com", "livemint.com", "deccanherald.com"
 ]
 
 @app.route("/scrape", methods=["GET"])
@@ -21,7 +20,7 @@ def scrape():
         return jsonify({"error": "Missing query parameter"}), 400
 
     headers = {"User-Agent": "Mozilla/5.0"}
-    search_url = f"https://www.bing.com/search?q={query}+site:{" OR site:".join(indian_domains)}"
+    search_url = f"https://www.bing.com/search?q={query}+site:" + "+OR+site:".join(indian_sites)
 
     try:
         search_res = requests.get(search_url, headers=headers, timeout=10)
@@ -36,26 +35,37 @@ def scrape():
                 break
 
         if not links:
-            return jsonify({"data": ["❌ No Indian English articles found for this query."]})
+            return jsonify({"data": ["❌ No Indian English news links found."]})
 
-        summaries = []
+        results = []
         for url in links:
             try:
-                article_res = requests.get(url, headers=headers, timeout=10)
-                article_soup = BeautifulSoup(article_res.text, "html.parser")
-                paragraphs = article_soup.find_all("p")
-                content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 60])
-                text = " ".join(content.split())
-                if len(text.split()) >= 150:
+                article = requests.get(url, headers=headers, timeout=10)
+                article_soup = BeautifulSoup(article.text, "html.parser")
+
+                # Collect content from multiple tag types
+                raw_text = []
+                for tag in article_soup.find_all(['p', 'span', 'article']):
+                    text = tag.get_text(strip=True)
+                    if text and len(text.split()) > 10:
+                        raw_text.append(text)
+
+                # Filter: remove duplicate and footer-like content
+                paragraphs = list(dict.fromkeys(raw_text))  # remove duplicates
+                clean_paragraphs = [p for p in paragraphs if "©" not in p and "cookie" not in p.lower()]
+                full_text = " ".join(clean_paragraphs)
+
+                # Truncate long results for frontend (400-500 words max)
+                if len(full_text) > 300:
                     domain = url.split("/")[2].replace("www.", "")
-                    summaries.append(f"According to {domain}:\n{text[:2000]}")
-            except Exception:
+                    result = f"According to {domain}:\n" + " ".join(full_text.split()[:400])
+                    results.append(result)
+            except Exception as e:
                 continue
 
-        if not summaries:
+        if not results:
             return jsonify({"data": ["❌ Articles found, but couldn't extract readable content."]})
-
-        return jsonify({"data": summaries})
+        return jsonify({"data": results})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
