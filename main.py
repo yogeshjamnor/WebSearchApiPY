@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 app = Flask(__name__)
 CORS(app)
 
-INDIAN_NEWS_DOMAINS = {
+# ✅ Strictly allow only Indian English news domains
+INDIAN_ENGLISH_DOMAINS = {
     "ndtv.com",
     "timesofindia.indiatimes.com",
     "indiatoday.in",
@@ -16,20 +17,18 @@ INDIAN_NEWS_DOMAINS = {
     "thehindu.com",
     "indianexpress.com",
     "livemint.com",
-    "deccanherald.com"
+    "deccanherald.com",
+    "theprint.in"
 }
 
-BLOCKED_DOMAINS = {"wikipedia.org", "wikidata.org", "britannica.com", "wikivoyage.org"}
+BLOCKED_DOMAINS = {"wikipedia.org", "wikidata.org", "britannica.com"}
 
-def is_valid_indian_news_site(url):
-    try:
-        domain = urlparse(url).netloc.replace("www.", "")
-        return (
-            any(site in domain for site in INDIAN_NEWS_DOMAINS)
-            and not any(block in domain for block in BLOCKED_DOMAINS)
-        )
-    except:
-        return False
+def is_valid_domain(url):
+    domain = urlparse(url).netloc.replace("www.", "")
+    return (
+        any(site in domain for site in INDIAN_ENGLISH_DOMAINS)
+        and not any(block in domain for block in BLOCKED_DOMAINS)
+    )
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -38,35 +37,36 @@ def scrape():
         return jsonify({"error": "Missing query parameter"}), 400
 
     headers = {"User-Agent": "Mozilla/5.0"}
-    search_url = f"https://www.bing.com/search?q={query}"
+    search_url = f"https://www.bing.com/search?q={query}+site:ndtv.com+OR+site:timesofindia.indiatimes.com+OR+site:indiatoday.in+OR+site:hindustantimes.com+OR+site:news18.com+OR+site:thehindu.com+OR+site:indianexpress.com+OR+site:livemint.com+OR+site:deccanherald.com+OR+site:theprint.in"
 
     try:
-        search_res = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(search_res.text, "html.parser")
+        res = requests.get(search_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
 
+        # ✅ Get only valid Indian English links
         links = []
         for a in soup.select("li.b_algo h2 a"):
             href = a.get("href")
-            if href and href.startswith("http") and is_valid_indian_news_site(href):
+            if href and href.startswith("http") and is_valid_domain(href):
                 links.append(href)
             if len(links) >= 5:
                 break
 
         if not links:
-            return jsonify({"data": ["❌ No valid Indian news links found."]})
+            return jsonify({"data": ["❌ No valid Indian English news links found."]})
 
+        # ✅ Fetch article summaries
         results = []
         for url in links:
             try:
-                res = requests.get(url, headers=headers, timeout=10)
-                article_soup = BeautifulSoup(res.text, "html.parser")
-                paragraphs = article_soup.find_all("p")
+                article = requests.get(url, headers=headers, timeout=10)
+                article_soup = BeautifulSoup(article.text, "html.parser")
+                paras = article_soup.find_all("p")
                 content = "\n".join([
-                    p.get_text(strip=True) for p in paragraphs
+                    p.get_text(strip=True) for p in paras
                     if len(p.get_text(strip=True).split()) > 10
+                    and p.get_text(strip=True).isascii()
                     and "cookie" not in p.get_text().lower()
-                    and "consent" not in p.get_text().lower()
-                    and "subscribe" not in p.get_text().lower()
                 ])
                 summary = " ".join(content.split()[:400])
                 domain = urlparse(url).netloc.replace("www.", "")
@@ -76,10 +76,10 @@ def scrape():
                 continue
 
         if not results:
-            return jsonify({"data": ["❌ Articles found, but couldn't extract readable content."]})
+            return jsonify({"data": ["❌ Articles found, but couldn't extract readable English content."]})
 
         return jsonify({"data": results})
-
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
