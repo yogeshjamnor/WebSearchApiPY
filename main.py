@@ -20,7 +20,7 @@ def scrape():
         search_res = requests.get(search_url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(search_res.text, "html.parser")
 
-        # Try to extract direct summary from answer box
+        # Try to extract Bing Answer Box (summary-style)
         for selector in [".b_focusTextLarge", ".b_focusTextMedium", ".b_vPanel .b_snippet"]:
             element = soup.select_one(selector)
             if element:
@@ -28,10 +28,11 @@ def scrape():
                 if summary:
                     return jsonify({"data": [f"Summary:\n{summary}"]})
 
-        # Fallback to snippets, excluding unwanted domains
+        # Fallback: parse normal search snippets
         snippets = soup.select("li.b_algo")
         results = []
         seen_sites = set()
+        seen_texts = set()
 
         for snippet in snippets:
             title_tag = snippet.select_one("h2 a")
@@ -48,9 +49,16 @@ def scrape():
             if domain in seen_sites:
                 continue
 
-            seen_sites.add(domain)
             title = title_tag.get_text(strip=True)
             desc = desc_tag.get_text(strip=True)
+            combined_text = f"{title}\n{desc}"
+
+            if combined_text in seen_texts:
+                continue
+
+            seen_sites.add(domain)
+            seen_texts.add(combined_text)
+
             if title and desc:
                 results.append(f"According to {domain}:\n{title}\n{desc}")
 
