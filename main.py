@@ -52,34 +52,40 @@ def scrape():
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # Determine category by keyword in the query
-    category = "default"
-    for cat in SITE_FILTERS:
-        if cat in query.lower():
-            category = cat
-            break
+    # Define allowed news domains
+    allowed_sites = [
+        "ndtv.com",
+        "news18.com",
+        "hindustantimes.com",
+        "aljazeera.com",
+        "bbc.com",
+        "cnn.com",
+        "reuters.com",
+        "theguardian.com",
+        "indiatoday.in",
+        "timesofindia.indiatimes.com"
+    ]
 
-    sites = SITE_FILTERS[category]
-    sites_filter = "+OR+".join(f"site:{site}" for site in sites)
-
-    # Bing search
-    search_url = f"https://www.bing.com/search?q={query}+{sites_filter}"
+    # Bing search with optional site hints
+    site_hints = "+OR+".join(f"site:{site}" for site in allowed_sites)
+    search_url = f"https://www.bing.com/search?q={query}+{site_hints}"
 
     try:
         search_res = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(search_res.text, "html.parser")
         result_links = []
 
-        # Collect links from search results
         for li in soup.select("li.b_algo h2 a"):
             href = li.get("href")
             if href and href.startswith("http"):
-                result_links.append(href)
+                domain = href.split("/")[2].replace("www.", "")
+                if any(site in domain for site in allowed_sites):
+                    result_links.append(href)
             if len(result_links) >= 3:
                 break
 
         if not result_links:
-            return jsonify({"data": ["❌ No articles found for that query."]})
+            return jsonify({"data": ["❌ No live news articles found for that query."]})
 
         results = []
         for url in result_links:
@@ -87,7 +93,9 @@ def scrape():
                 article_res = requests.get(url, headers=headers, timeout=10)
                 article_soup = BeautifulSoup(article_res.text, "html.parser")
                 paragraphs = article_soup.find_all("p")
-                content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text()) > 60])
+                content = "\n".join(
+                    [p.get_text(strip=True) for p in paragraphs if len(p.get_text()) > 60]
+                )
                 summary = " ".join(content.split()[:400])
                 source = url.split("/")[2].replace("www.", "")
                 if summary:
@@ -96,7 +104,7 @@ def scrape():
                 continue
 
         if not results:
-            return jsonify({"data": ["❌ No readable content found in the articles."]})
+            return jsonify({"data": ["❌ No readable news content found in the articles."]})
         
         return jsonify({"data": results})
 
