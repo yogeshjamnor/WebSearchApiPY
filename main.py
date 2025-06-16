@@ -2,33 +2,84 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
 
 app = Flask(__name__)
 CORS(app)
 
-# ✅ Strictly allow only Indian English news domains
-INDIAN_ENGLISH_DOMAINS = {
-    "ndtv.com",
-    "timesofindia.indiatimes.com",
-    "indiatoday.in",
-    "hindustantimes.com",
-    "news18.com",
-    "thehindu.com",
-    "indianexpress.com",
-    "livemint.com",
-    "deccanherald.com",
-    "theprint.in"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-BLOCKED_DOMAINS = {"wikipedia.org", "wikidata.org", "britannica.com"}
+# Each source has a scraper function
+def scrape_news18(query):
+    url = f"https://www.news18.com/search/?q={query}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
+        articles = soup.select("div.search-listing li a")
+        links = [a["href"] for a in articles if a["href"].startswith("http")][:2]
 
-def is_valid_domain(url):
-    domain = urlparse(url).netloc.replace("www.", "")
-    return (
-        any(site in domain for site in INDIAN_ENGLISH_DOMAINS)
-        and not any(block in domain for block in BLOCKED_DOMAINS)
-    )
+        results = []
+        for link in links:
+            article = requests.get(link, headers=HEADERS, timeout=10)
+            article_soup = BeautifulSoup(article.text, "html.parser")
+            paragraphs = article_soup.find_all("p")
+            content = "\n".join([
+                p.get_text(strip=True)
+                for p in paragraphs if len(p.get_text(strip=True)) > 80 and p.get_text().isascii()
+            ])
+            summary = " ".join(content.split()[:400])
+            if summary:
+                results.append(f"According to news18.com:\n{summary}")
+        return results
+    except:
+        return []
+
+def scrape_ndtv(query):
+    url = f"https://www.ndtv.com/search?searchtext={query}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
+        articles = soup.select("div.new_search_content div.searchTitle a")
+        links = [a["href"] for a in articles if a["href"].startswith("http")][:2]
+
+        results = []
+        for link in links:
+            article = requests.get(link, headers=HEADERS, timeout=10)
+            article_soup = BeautifulSoup(article.text, "html.parser")
+            paragraphs = article_soup.find_all("p")
+            content = "\n".join([
+                p.get_text(strip=True)
+                for p in paragraphs if len(p.get_text(strip=True)) > 80 and p.get_text().isascii()
+            ])
+            summary = " ".join(content.split()[:400])
+            if summary:
+                results.append(f"According to ndtv.com:\n{summary}")
+        return results
+    except:
+        return []
+
+def scrape_indiatoday(query):
+    url = f"https://www.indiatoday.in/search?search={query}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
+        articles = soup.select("div.search-result a")
+        links = [a["href"] for a in articles if a["href"].startswith("http")][:2]
+
+        results = []
+        for link in links:
+            article = requests.get(link, headers=HEADERS, timeout=10)
+            article_soup = BeautifulSoup(article.text, "html.parser")
+            paragraphs = article_soup.find_all("p")
+            content = "\n".join([
+                p.get_text(strip=True)
+                for p in paragraphs if len(p.get_text(strip=True)) > 80 and p.get_text().isascii()
+            ])
+            summary = " ".join(content.split()[:400])
+            if summary:
+                results.append(f"According to indiatoday.in:\n{summary}")
+        return results
+    except:
+        return []
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -36,52 +87,17 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    headers = {"User-Agent": "Mozilla/5.0"}
-    search_url = f"https://www.bing.com/search?q={query}+site:ndtv.com+OR+site:timesofindia.indiatimes.com+OR+site:indiatoday.in+OR+site:hindustantimes.com+OR+site:news18.com+OR+site:thehindu.com+OR+site:indianexpress.com+OR+site:livemint.com+OR+site:deccanherald.com+OR+site:theprint.in"
+    combined_results = (
+        scrape_news18(query) +
+        scrape_ndtv(query) +
+        scrape_indiatoday(query)
+    )
 
-    try:
-        res = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
+    if not combined_results:
+        return jsonify({"data": ["❌ No live Indian articles found for that query."]})
 
-        # ✅ Get only valid Indian English links
-        links = []
-        for a in soup.select("li.b_algo h2 a"):
-            href = a.get("href")
-            if href and href.startswith("http") and is_valid_domain(href):
-                links.append(href)
-            if len(links) >= 5:
-                break
+    return jsonify({"data": combined_results})
 
-        if not links:
-            return jsonify({"data": ["❌ No valid Indian English news links found."]})
-
-        # ✅ Fetch article summaries
-        results = []
-        for url in links:
-            try:
-                article = requests.get(url, headers=headers, timeout=10)
-                article_soup = BeautifulSoup(article.text, "html.parser")
-                paras = article_soup.find_all("p")
-                content = "\n".join([
-                    p.get_text(strip=True) for p in paras
-                    if len(p.get_text(strip=True).split()) > 10
-                    and p.get_text(strip=True).isascii()
-                    and "cookie" not in p.get_text().lower()
-                ])
-                summary = " ".join(content.split()[:400])
-                domain = urlparse(url).netloc.replace("www.", "")
-                if summary:
-                    results.append(f"According to {domain}:\n{summary}")
-            except:
-                continue
-
-        if not results:
-            return jsonify({"data": ["❌ Articles found, but couldn't extract readable English content."]})
-
-        return jsonify({"data": results})
-    
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
