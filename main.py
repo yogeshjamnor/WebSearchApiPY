@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
-import re
 
 app = Flask(__name__)
 CORS(app)
@@ -42,19 +41,19 @@ def scrape():
                 page = requests.get(link, headers=HEADERS, timeout=10)
                 article = BeautifulSoup(page.text, "html.parser")
 
-                # Remove non-readable sections
+                # Remove script, nav, etc.
                 for tag in article(['script', 'style', 'footer', 'nav', 'aside', 'form']):
                     tag.decompose()
 
-                # Grab all <p> tags with decent content
+                # Collect long readable paragraphs
                 paragraphs = article.find_all('p')
                 content = [p.get_text(strip=True) for p in paragraphs if len(p.get_text()) > 60]
-                text = "\n".join(content[:20])  # limit to ~20 paragraphs
+                text = "\n\n".join(content[:30])  # up to 30 paragraphs (~A4 page)
 
                 if text:
                     domain = link.split("/")[2].replace("www.", "")
-                    summaries.append(f"According to {domain}:\n{text}")
-            except:
+                    summaries.append(f"📌 According to {domain}:\n\n{text}")
+            except Exception as e:
                 continue
 
         if summaries:
