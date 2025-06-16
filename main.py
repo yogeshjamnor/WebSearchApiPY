@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
 @app.route("/")
 def home():
@@ -14,13 +14,10 @@ def home():
 def scrape():
     query = request.args.get("q")
     if not query:
-        return jsonify({"error": "Missing query parameter 'q'"}), 400
+        return jsonify({"error": "Missing query parameter"}), 400
 
     url = f"https://lite.duckduckgo.com/lite?q={query}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
         res = requests.get(url, headers=headers)
