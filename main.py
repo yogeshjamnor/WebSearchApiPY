@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+import urllib.parse
 
 app = Flask(__name__)
 CORS(app)
@@ -17,48 +17,27 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    search_url = f"https://lite.duckduckgo.com/lite?q={query}"
+    url = f"https://lite.duckduckgo.com/lite?q={query}"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
-        search_res = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(search_res.text, "html.parser")
+        res = requests.get(url, headers=headers)
+        soup = BeautifulSoup(res.text, "html.parser")
 
         results = []
         for link in soup.select("a"):
             title = link.text.strip()
             href = link.get("href")
-            if href and "http" in href:
-                clean_link = href.split("&rut=")[0].replace("/l/?uddg=", "")
-                article_url = requests.utils.unquote(clean_link)
 
-                # Visit the article and extract summary
-                try:
-                    article_res = requests.get(article_url, headers=headers, timeout=5)
-                    article_soup = BeautifulSoup(article_res.text, "html.parser")
+            # Only look for DuckDuckGo redirect links
+            if href and "uddg=" in href:
+                parsed = urllib.parse.urlparse(href)
+                query_params = urllib.parse.parse_qs(parsed.query)
+                real_link = query_params.get("uddg", [None])[0]
 
-                    # Grab first paragraph or meta description
-                    paragraph = article_soup.find("p")
-                    description = paragraph.text.strip() if paragraph else ""
-
-                    if not description:
-                        meta = article_soup.find("meta", attrs={"name": "description"})
-                        if meta and meta.get("content"):
-                            description = meta["content"].strip()
-
-                    results.append({
-                        "title": title,
-                        "link": article_url,
-                        "summary": description if description else "No summary available.",
-                        "source": urlparse(article_url).hostname.replace("www.", "")
-                    })
-                except Exception as article_err:
-                    results.append({
-                        "title": title,
-                        "link": article_url,
-                        "summary": "Could not fetch article.",
-                        "source": urlparse(article_url).hostname.replace("www.", "")
-                    })
+                if real_link:
+                    decoded_link = urllib.parse.unquote(real_link)
+                    results.append({"title": title, "link": decoded_link})
 
             if len(results) >= 5:
                 break
