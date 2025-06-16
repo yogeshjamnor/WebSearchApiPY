@@ -2,43 +2,54 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
-import xml.etree.ElementTree as ET
+import re
 
 app = Flask(__name__)
 CORS(app)
 
+# Keywords for filtering Indian English results
+indian_domains = [
+    "indiatoday.in", "ndtv.com", "timesofindia.indiatimes.com", "hindustantimes.com",
+    "news18.com", "livemint.com", "thehindu.com", "economictimes.indiatimes.com",
+    "indianexpress.com", "dnaindia.com", "deccanherald.com"
+]
+
 @app.route("/scrape", methods=["GET"])
-def scrape_news():
+def scrape():
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    rss_url = f"https://news.google.com/rss/search?q={query}+when:7d&hl=en-IN&gl=IN&ceid=IN:en"
     headers = {"User-Agent": "Mozilla/5.0"}
+    search_url = f"https://www.bing.com/search?q={query}+site:{" OR site:".join(indian_domains)}"
 
     try:
-        res = requests.get(rss_url, headers=headers, timeout=10)
-        root = ET.fromstring(res.content)
+        search_res = requests.get(search_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(search_res.text, "html.parser")
 
-        items = root.findall(".//item")
-        if not items:
-            return jsonify({"data": ["❌ No English news found."]})
+        links = []
+        for a in soup.select("li.b_algo h2 a"):
+            href = a.get("href")
+            if href and href.startswith("http"):
+                links.append(href)
+            if len(links) >= 4:
+                break
+
+        if not links:
+            return jsonify({"data": ["❌ No Indian English articles found for this query."]})
 
         summaries = []
-        for item in items[:4]:  # limit to 3-4 top articles
-            link = item.find("link").text
-            title = item.find("title").text
+        for url in links:
             try:
-                article = requests.get(link, headers=headers, timeout=10)
-                soup = BeautifulSoup(article.text, "html.parser")
-                paras = soup.find_all("p")
-                content = "\n".join(
-                    [p.get_text(strip=True) for p in paras if len(p.get_text(strip=True)) > 50]
-                )
-                summary = " ".join(content.split()[:400])
-                if summary:
-                    summaries.append(f"According to {link.split('/')[2]}:\n{summary}")
-            except:
+                article_res = requests.get(url, headers=headers, timeout=10)
+                article_soup = BeautifulSoup(article_res.text, "html.parser")
+                paragraphs = article_soup.find_all("p")
+                content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 60])
+                text = " ".join(content.split())
+                if len(text.split()) >= 150:
+                    domain = url.split("/")[2].replace("www.", "")
+                    summaries.append(f"According to {domain}:\n{text[:2000]}")
+            except Exception:
                 continue
 
         if not summaries:
