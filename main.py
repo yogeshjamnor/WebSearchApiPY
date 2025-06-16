@@ -8,78 +8,26 @@ CORS(app)
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# Each source has a scraper function
-def scrape_news18(query):
-    url = f"https://www.news18.com/search/?q={query}"
+def fetch_links(source, query, search_url, selector, attr="href", limit=2):
     try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
+        res = requests.get(search_url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
-        articles = soup.select("div.search-listing li a")
-        links = [a["href"] for a in articles if a["href"].startswith("http")][:2]
-
-        results = []
-        for link in links:
-            article = requests.get(link, headers=HEADERS, timeout=10)
-            article_soup = BeautifulSoup(article.text, "html.parser")
-            paragraphs = article_soup.find_all("p")
-            content = "\n".join([
-                p.get_text(strip=True)
-                for p in paragraphs if len(p.get_text(strip=True)) > 80 and p.get_text().isascii()
-            ])
-            summary = " ".join(content.split()[:400])
-            if summary:
-                results.append(f"According to news18.com:\n{summary}")
-        return results
+        links = [a[attr] for a in soup.select(selector) if a.has_attr(attr) and a[attr].startswith("http")]
+        return links[:limit]
     except:
         return []
 
-def scrape_ndtv(query):
-    url = f"https://www.ndtv.com/search?searchtext={query}"
+def extract_content(url, source_name):
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
-        articles = soup.select("div.new_search_content div.searchTitle a")
-        links = [a["href"] for a in articles if a["href"].startswith("http")][:2]
-
-        results = []
-        for link in links:
-            article = requests.get(link, headers=HEADERS, timeout=10)
-            article_soup = BeautifulSoup(article.text, "html.parser")
-            paragraphs = article_soup.find_all("p")
-            content = "\n".join([
-                p.get_text(strip=True)
-                for p in paragraphs if len(p.get_text(strip=True)) > 80 and p.get_text().isascii()
-            ])
-            summary = " ".join(content.split()[:400])
-            if summary:
-                results.append(f"According to ndtv.com:\n{summary}")
-        return results
+        paragraphs = soup.find_all("p")
+        text_blocks = [p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 60]
+        combined = "\n".join(text_blocks)
+        summary = " ".join(combined.split()[:400])
+        return f"According to {source_name}:\n{summary}" if summary else None
     except:
-        return []
-
-def scrape_indiatoday(query):
-    url = f"https://www.indiatoday.in/search?search={query}"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        articles = soup.select("div.search-result a")
-        links = [a["href"] for a in articles if a["href"].startswith("http")][:2]
-
-        results = []
-        for link in links:
-            article = requests.get(link, headers=HEADERS, timeout=10)
-            article_soup = BeautifulSoup(article.text, "html.parser")
-            paragraphs = article_soup.find_all("p")
-            content = "\n".join([
-                p.get_text(strip=True)
-                for p in paragraphs if len(p.get_text(strip=True)) > 80 and p.get_text().isascii()
-            ])
-            summary = " ".join(content.split()[:400])
-            if summary:
-                results.append(f"According to indiatoday.in:\n{summary}")
-        return results
-    except:
-        return []
+        return None
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -87,17 +35,48 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    combined_results = (
-        scrape_news18(query) +
-        scrape_ndtv(query) +
-        scrape_indiatoday(query)
-    )
+    all_results = []
 
-    if not combined_results:
-        return jsonify({"data": ["❌ No live Indian articles found for that query."]})
+    # Add Indian news websites (Hindi/English/Marathi)
+    sources = [
+        {
+            "name": "NDTV",
+            "search_url": f"https://www.ndtv.com/search?searchtext={query}",
+            "selector": "div.new_search_content div.searchTitle a"
+        },
+        {
+            "name": "News18",
+            "search_url": f"https://www.news18.com/search/?q={query}",
+            "selector": "div.search-listing li a"
+        },
+        {
+            "name": "AajTak",
+            "search_url": f"https://www.aajtak.in/search?search={query}",
+            "selector": "div.listing div.news_title a"
+        },
+        {
+            "name": "IndiaToday",
+            "search_url": f"https://www.indiatoday.in/search?search={query}",
+            "selector": "div.search-result a"
+        },
+        {
+            "name": "ZeeNews",
+            "search_url": f"https://zeenews.india.com/search?q={query}",
+            "selector": "div.search-cont a"
+        }
+    ]
 
-    return jsonify({"data": combined_results})
+    for source in sources:
+        links = fetch_links(source["name"], query, source["search_url"], source["selector"])
+        for link in links:
+            content = extract_content(link, source["name"])
+            if content:
+                all_results.append(content)
 
+    if not all_results:
+        return jsonify({"data": ["❌ No Indian news found in any language for that query."]})
+    
+    return jsonify({"data": all_results})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
