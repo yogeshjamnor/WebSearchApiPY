@@ -6,28 +6,34 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 CORS(app)
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+# Map of site categories based on keywords
+SITE_CATEGORIES = {
+    "tech": ["techcrunch.com", "wired.com", "yourstory.com", "livemint.com"],
+    "news": ["ndtv.com", "news18.com", "hindustantimes.com", "indianexpress.com"],
+    "business": ["economictimes.indiatimes.com", "thehindu.com", "business-standard.com"],
+    "general": ["wikipedia.org", "britannica.com"]
+}
 
-def fetch_links(source, query, search_url, selector, attr="href", limit=2):
-    try:
-        res = requests.get(search_url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        links = [a[attr] for a in soup.select(selector) if a.has_attr(attr) and a[attr].startswith("http")]
-        return links[:limit]
-    except:
-        return []
+# Simple keyword mapping
+KEYWORDS_MAP = {
+    "ai": "tech",
+    "artificial intelligence": "tech",
+    "machine learning": "tech",
+    "budget": "business",
+    "finance": "business",
+    "stock": "business",
+    "rain": "news",
+    "accident": "news",
+    "crash": "news",
+    "explosion": "news"
+}
 
-def extract_content(url, source_name):
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        paragraphs = soup.find_all("p")
-        text_blocks = [p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 60]
-        combined = "\n".join(text_blocks)
-        summary = " ".join(combined.split()[:400])
-        return f"According to {source_name}:\n{summary}" if summary else None
-    except:
-        return None
+def get_category(query):
+    query_lower = query.lower()
+    for keyword in KEYWORDS_MAP:
+        if keyword in query_lower:
+            return KEYWORDS_MAP[keyword]
+    return "news"  # default fallback
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -35,48 +41,45 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    all_results = []
+    category = get_category(query)
+    selected_sites = SITE_CATEGORIES.get(category, SITE_CATEGORIES["news"])
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    # Add Indian news websites (Hindi/English/Marathi)
-    sources = [
-        {
-            "name": "NDTV",
-            "search_url": f"https://www.ndtv.com/search?searchtext={query}",
-            "selector": "div.new_search_content div.searchTitle a"
-        },
-        {
-            "name": "News18",
-            "search_url": f"https://www.news18.com/search/?q={query}",
-            "selector": "div.search-listing li a"
-        },
-        {
-            "name": "AajTak",
-            "search_url": f"https://www.aajtak.in/search?search={query}",
-            "selector": "div.listing div.news_title a"
-        },
-        {
-            "name": "IndiaToday",
-            "search_url": f"https://www.indiatoday.in/search?search={query}",
-            "selector": "div.search-result a"
-        },
-        {
-            "name": "ZeeNews",
-            "search_url": f"https://zeenews.india.com/search?q={query}",
-            "selector": "div.search-cont a"
-        }
-    ]
+    results = []
+    try:
+        for domain in selected_sites:
+            search_url = f"https://www.bing.com/search?q={query}+site:{domain}"
+            search_res = requests.get(search_url, headers=headers, timeout=10)
+            soup = BeautifulSoup(search_res.text, "html.parser")
+            result_links = []
 
-    for source in sources:
-        links = fetch_links(source["name"], query, source["search_url"], source["selector"])
-        for link in links:
-            content = extract_content(link, source["name"])
-            if content:
-                all_results.append(content)
+            for a in soup.select("li.b_algo h2 a"):
+                href = a.get("href")
+                if href and href.startswith("http"):
+                    result_links.append(href)
+                if len(result_links) >= 2:
+                    break
 
-    if not all_results:
-        return jsonify({"data": ["❌ No Indian news found in any language for that query."]})
-    
-    return jsonify({"data": all_results})
+            for url in result_links:
+                try:
+                    article_res = requests.get(url, headers=headers, timeout=10)
+                    article_soup = BeautifulSoup(article_res.text, "html.parser")
+                    paragraphs = article_soup.find_all("p")
+                    content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text()) > 60])
+                    summary = " ".join(content.split()[:400])
+                    source = url.split("/")[2].replace("www.", "")
+                    if summary:
+                        results.append(f"According to {source}:\n{summary}")
+                except:
+                    continue
+
+        if not results:
+            return jsonify({"data": ["\u274c No live readable articles found for that query."]})
+
+        return jsonify({"data": results})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
