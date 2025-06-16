@@ -12,25 +12,15 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    # ✅ List of Indian news websites to include
+    # ✅ Indian news sites
     allowed_sites = [
-        "ndtv.com",
-        "news18.com",
-        "hindustantimes.com",
-        "indiatoday.in",
-        "timesofindia.indiatimes.com",
-        "thehindu.com",
-        "zeenews.india.com",
-        "firstpost.com",
-        "livemint.com",
-        "deccanherald.com"
+        "ndtv.com", "news18.com", "hindustantimes.com", "indiatoday.in",
+        "timesofindia.indiatimes.com", "thehindu.com", "zeenews.india.com",
+        "firstpost.com", "livemint.com", "deccanherald.com"
     ]
 
-    # 🔍 Create site-filtered Bing search URL
     site_filter = "+OR+".join(f"site:{site}" for site in allowed_sites)
     search_url = f"https://www.bing.com/search?q={query}+{site_filter}"
 
@@ -39,19 +29,22 @@ def scrape():
         soup = BeautifulSoup(search_response.text, "html.parser")
 
         result_links = []
+        seen = set()
+
+        # 🔍 Collect up to 10 links from allowed domains
         for tag in soup.select("li.b_algo h2 a"):
             href = tag.get("href")
             if href and href.startswith("http"):
                 domain = href.split("/")[2].replace("www.", "")
-                if any(site in domain for site in allowed_sites):
+                if any(site in domain for site in allowed_sites) and href not in seen:
                     result_links.append(href)
-            if len(result_links) >= 3:
+                    seen.add(href)
+            if len(result_links) >= 10:
                 break
 
         if not result_links:
             return jsonify({"data": ["❌ No Indian news articles found for that query."]})
 
-        # 📄 Fetch and summarize each article
         results = []
         for url in result_links:
             try:
@@ -64,7 +57,7 @@ def scrape():
                 ])
                 summary = " ".join(content.split()[:400])
                 source = url.split("/")[2].replace("www.", "")
-                if summary:
+                if summary and len(summary) > 200:
                     results.append(f"According to {source}:\n{summary}")
             except:
                 continue
