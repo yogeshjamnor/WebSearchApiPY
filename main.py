@@ -43,9 +43,11 @@ def scrape():
             link = title_tag.get("href", "")
             domain = link.split("/")[2].replace("www.", "") if "//" in link else ""
 
+            # Exclude Wikipedia and Britannica results from the search
             if any(domain.endswith(ex) for ex in EXCLUDED_DOMAINS):
                 continue
 
+            # Avoid duplicates
             if domain in seen_sites:
                 continue
 
@@ -53,6 +55,7 @@ def scrape():
             desc = desc_tag.get_text(strip=True)
             combined_text = f"{title}\n{desc}"
 
+            # Avoid repeated descriptions
             if combined_text in seen_texts:
                 continue
 
@@ -62,6 +65,7 @@ def scrape():
             if title and desc:
                 results.append(f"According to {domain}:\n{title}\n{desc}")
 
+            # Limit results to top 4 for better response
             if len(results) >= 4:
                 break
 
