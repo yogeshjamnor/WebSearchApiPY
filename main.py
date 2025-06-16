@@ -2,12 +2,15 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
+import re
 
 app = Flask(__name__)
 CORS(app)
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
-EXCLUDED_DOMAINS = ["wikipedia.org", "britannica.com"]
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
+EXCLUDED_DOMAINS = ["wikipedia.org", "britannica.com", "youtube.com", "facebook.com", "instagram.com"]
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -16,63 +19,48 @@ def scrape():
         return jsonify({"error": "Missing query parameter"}), 400
 
     try:
-        search_url = f"https://www.bing.com/search?q={query}"
-        search_res = requests.get(search_url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(search_res.text, "html.parser")
+        search_url = f"https://www.bing.com/search?q={query}+site:.in"
+        res = requests.get(search_url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
 
-        # Try to extract Bing Answer Box (summary-style)
-        for selector in [".b_focusTextLarge", ".b_focusTextMedium", ".b_vPanel .b_snippet"]:
-            element = soup.select_one(selector)
-            if element:
-                summary = element.get_text(strip=True)
-                if summary:
-                    return jsonify({"data": [f"Summary:\n{summary}"]})
-
-        # Fallback: parse normal search snippets
-        snippets = soup.select("li.b_algo")
-        results = []
-        seen_sites = set()
-        seen_texts = set()
-
-        for snippet in snippets:
-            title_tag = snippet.select_one("h2 a")
-            desc_tag = snippet.select_one(".b_caption p")
-            if not title_tag or not desc_tag:
-                continue
-
-            link = title_tag.get("href", "")
-            domain = link.split("/")[2].replace("www.", "") if "//" in link else ""
-
-            # Exclude Wikipedia and Britannica results from the search
-            if any(domain.endswith(ex) for ex in EXCLUDED_DOMAINS):
-                continue
-
-            # Avoid duplicates
-            if domain in seen_sites:
-                continue
-
-            title = title_tag.get_text(strip=True)
-            desc = desc_tag.get_text(strip=True)
-            combined_text = f"{title}\n{desc}"
-
-            # Avoid repeated descriptions
-            if combined_text in seen_texts:
-                continue
-
-            seen_sites.add(domain)
-            seen_texts.add(combined_text)
-
-            if title and desc:
-                results.append(f"According to {domain}:\n{title}\n{desc}")
-
-            # Limit results to top 4 for better response
-            if len(results) >= 4:
+        links = []
+        for a in soup.select("li.b_algo h2 a"):
+            href = a.get("href")
+            if href and href.startswith("http"):
+                domain = href.split("/")[2].replace("www.", "")
+                if not any(domain.endswith(ex) for ex in EXCLUDED_DOMAINS):
+                    links.append(href)
+            if len(links) >= 5:
                 break
 
-        if results:
-            return jsonify({"data": results})
+        if not links:
+            return jsonify({"data": ["❌ No valid Indian English news links found."]})
+
+        summaries = []
+        for link in links:
+            try:
+                page = requests.get(link, headers=HEADERS, timeout=10)
+                article = BeautifulSoup(page.text, "html.parser")
+
+                # Remove non-readable sections
+                for tag in article(['script', 'style', 'footer', 'nav', 'aside', 'form']):
+                    tag.decompose()
+
+                # Grab all <p> tags with decent content
+                paragraphs = article.find_all('p')
+                content = [p.get_text(strip=True) for p in paragraphs if len(p.get_text()) > 60]
+                text = "\n".join(content[:20])  # limit to ~20 paragraphs
+
+                if text:
+                    domain = link.split("/")[2].replace("www.", "")
+                    summaries.append(f"According to {domain}:\n{text}")
+            except:
+                continue
+
+        if summaries:
+            return jsonify({"data": summaries})
         else:
-            return jsonify({"data": ["❌ No relevant summary or results found."]})
+            return jsonify({"data": ["❌ Articles found, but couldn't extract readable content."]})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
