@@ -6,35 +6,7 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 CORS(app)
 
-SITE_CATEGORIES = {
-    "tech": ["techcrunch.com", "wired.com", "yourstory.com", "livemint.com"],
-    "news": ["ndtv.com", "news18.com", "hindustantimes.com", "indianexpress.com"],
-    "business": ["economictimes.indiatimes.com", "thehindu.com", "business-standard.com"],
-    "general": ["wikipedia.org", "britannica.com"]
-}
-
-KEYWORDS_MAP = {
-    "ai": "tech",
-    "artificial intelligence": "tech",
-    "machine learning": "tech",
-    "budget": "business",
-    "finance": "business",
-    "stock": "business",
-    "rain": "news",
-    "accident": "news",
-    "crash": "news",
-    "explosion": "news",
-    "pune": "news",
-    "mumbai": "news",
-    "ahmedabad": "news"
-}
-
-def get_category(query):
-    query_lower = query.lower()
-    for keyword, cat in KEYWORDS_MAP.items():
-        if keyword in query_lower:
-            return cat
-    return "news"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -42,37 +14,45 @@ def scrape():
     if not query:
         return jsonify({"error": "Missing query parameter"}), 400
 
-    category = get_category(query)
-    selected_sites = SITE_CATEGORIES.get(category, SITE_CATEGORIES["news"])
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # Attempt to use Google Knowledge Panel or Bing answer box
+    try:
+        # Prefer Bing for easier parsing of direct answers
+        search_url = f"https://www.bing.com/search?q={query}"
+        search_res = requests.get(search_url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(search_res.text, "html.parser")
 
-    results = []
-    for domain in selected_sites:
-        search_url = f"https://www.bing.com/search?q={query}+site:{domain}"
-        try:
-            search_res = requests.get(search_url, headers=headers, timeout=10)
-            soup = BeautifulSoup(search_res.text, "html.parser")
-            links = [a.get("href") for a in soup.select("li.b_algo h2 a") if a.get("href", "").startswith("http")][:3]
+        # Check for Bing answer box or knowledge panel
+        direct_answer = soup.select_one(".b_focusTextLarge")
+        if not direct_answer:
+            direct_answer = soup.select_one(".b_vPanel .b_snippet")
+        if not direct_answer:
+            direct_answer = soup.select_one(".b_focusTextMedium")
 
-            for url in links:
-                try:
-                    art_res = requests.get(url, headers=headers, timeout=10)
-                    art_soup = BeautifulSoup(art_res.text, "html.parser")
-                    paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 60]
-                    content = "\n".join(paras)
-                    summary = " ".join(content.split()[:400])
-                    source = url.split("/")[2].replace("www.", "")
-                    if summary:
-                        results.append(f"According to {source}:\n{summary}")
-                except:
-                    continue
-        except:
-            continue
+        if direct_answer:
+            summary = direct_answer.get_text(strip=True)
+            return jsonify({"data": [f"Summary:
+{summary}"]})
 
-    if not results:
-        return jsonify({"data": ["❌ No live readable content found for that query."]})
+        # Fallback to general snippets if direct answer not found
+        snippets = soup.select("li.b_algo")
+        results = []
+        for snippet in snippets[:3]:
+            title_tag = snippet.select_one("h2 a")
+            desc_tag = snippet.select_one(".b_caption p")
+            if title_tag and desc_tag:
+                title = title_tag.get_text(strip=True)
+                desc = desc_tag.get_text(strip=True)
+                link = title_tag.get("href")
+                results.append(f"According to {link.split('/')[2].replace('www.', '')}:
+{title}\n{desc}")
 
-    return jsonify({"data": results})
+        if results:
+            return jsonify({"data": results})
+        else:
+            return jsonify({"data": ["❌ No summary or snippet found for that query."]})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
