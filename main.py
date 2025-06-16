@@ -13,7 +13,7 @@ def scrape():
         return jsonify({"error": "Missing query parameter"}), 400
 
     headers = {"User-Agent": "Mozilla/5.0"}
-    search_url = f"https://duckduckgo.com/html/?q={query}"
+    search_url = f"https://html.duckduckgo.com/html/?q={query}"
 
     try:
         search_response = requests.get(search_url, headers=headers, timeout=10)
@@ -22,7 +22,7 @@ def scrape():
         links = []
         for a in soup.select("a.result__a"):
             href = a.get("href")
-            if href and "http" in href:
+            if href and href.startswith("http"):
                 links.append(href)
             if len(links) >= 3:
                 break
@@ -34,19 +34,16 @@ def scrape():
                 article_soup = BeautifulSoup(article_res.text, "html.parser")
                 paragraphs = article_soup.find_all("p")
                 content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text()) > 80])
-                summary = " ".join(content.split()[:400])
+                summary = " ".join(content.split()[:800])  # approx A4 size
                 source = link.split("/")[2].replace("www.", "")
                 if summary:
                     results.append(f"According to {source}:\n{summary}")
             except Exception as e:
                 continue
 
-        if not results:
-            results.append("No relevant content found. Please try a different keyword.")
-
         return jsonify({"data": results})
     except Exception as e:
-        return jsonify({"error": f"Internal error: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(port=5000)
