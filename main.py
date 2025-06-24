@@ -3,6 +3,7 @@ from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 CORS(app)
@@ -10,7 +11,13 @@ CORS(app)
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
-EXCLUDED_DOMAINS = ["wikipedia.org", "youtube.com", "facebook.com", "instagram.com", "britannica.com"]
+
+# Domains to ignore
+EXCLUDED_DOMAINS = [
+    "wikipedia.org", "wikitravel.org", "youtube.com", "facebook.com",
+    "instagram.com", "britannica.com", "tripadvisor.com", "quora.com",
+    "medium.com", "linkedin.com", "reddit.com", "pinterest.com", "amazon.com"
+]
 
 @app.route("/scrape", methods=["GET"])
 def scrape():
@@ -19,8 +26,11 @@ def scrape():
         return jsonify({"error": "Missing query parameter"}), 400
 
     try:
-        encoded_query = quote(query + " news")
+        # Force recent news (last 2 days)
+        recent_date = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+        encoded_query = quote(f"{query} after:{recent_date}")
         search_url = f"https://www.bing.com/news/search?q={encoded_query}"
+
         res = requests.get(search_url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
 
@@ -43,21 +53,25 @@ def scrape():
                 page = requests.get(link, headers=HEADERS, timeout=10)
                 article = BeautifulSoup(page.text, "html.parser")
 
+                # Clean up unwanted tags
                 for tag in article(['script', 'style', 'footer', 'nav', 'aside', 'form']):
                     tag.decompose()
 
+                # Get readable paragraphs
                 paragraphs = article.find_all('p')
                 content = []
                 for p in paragraphs:
                     text = p.get_text(strip=True)
-                    if 60 < len(text) < 1000 and not any(x in text.lower() for x in ['cookie', 'subscribe']):
+                    if 60 < len(text) < 1000 and not any(x in text.lower() for x in ['cookie', 'subscribe', 'advert', 'feedback']):
                         content.append(text)
 
+                # Build a summary of up to 20 useful paragraphs
                 final_text = "\n\n".join(content[:20])
                 if final_text:
                     domain = link.split("/")[2].replace("www.", "")
                     summaries.append(f"📌 According to {domain}:\n\n{final_text}\n\n🔗 {link}")
             except Exception as e:
+                print(f"[Error scraping] {link} — {e}")
                 continue
 
         if summaries:
